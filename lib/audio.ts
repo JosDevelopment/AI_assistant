@@ -12,7 +12,7 @@ export class AudioReactor {
     | MediaElementAudioSourceNode
     | MediaStreamAudioSourceNode
     | null = null;
-  private data: Uint8Array | null = null;
+  private data: Uint8Array<ArrayBuffer> | null = null;
   private raf = 0;
   private listeners = new Set<(level: number) => void>();
   level = 0;
@@ -36,7 +36,7 @@ export class AudioReactor {
     this.analyser.fftSize = 256;
     this.source.connect(this.analyser);
     this.analyser.connect(ctx.destination);
-    this.data = new Uint8Array(this.analyser.frequencyBinCount);
+    this.data = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
     this.loop();
   }
 
@@ -47,7 +47,7 @@ export class AudioReactor {
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 256;
     this.source.connect(this.analyser);
-    this.data = new Uint8Array(this.analyser.frequencyBinCount);
+    this.data = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
     this.loop();
   }
 

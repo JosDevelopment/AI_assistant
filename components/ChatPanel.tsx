@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useApp } from "@/lib/store";
 import { AudioReactor } from "@/lib/audio";
 import MicButton from "./MicButton";
+import type { Capabilities } from "@/lib/capabilities";
 
 export default function ChatPanel({
   reactor,
+  caps,
 }: {
   reactor: AudioReactor;
+  caps: Capabilities;
 }) {
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -25,33 +28,45 @@ export default function ChatPanel({
   const resetHistory = useApp((s) => s.resetHistory);
   const setSpeaking = useApp((s) => s.setSpeaking);
 
-  useEffect(() => {
-    if (!audioRef.current || attachedRef.current) return;
-    // Lazily attach on first user gesture (handled in send())
-  }, []);
-
   async function send(text: string) {
     const trimmed = text.trim();
     if (!trimmed || thinking) return;
+    if (!caps.hasAnyModel) {
+      setError(
+        "No model providers configured. Add at least one API key to .env.local and restart."
+      );
+      return;
+    }
     setError(null);
     setInput("");
     pushMessage({ role: "user", content: trimmed });
     setThinking(true);
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          modelId: model.id,
-          systemPrompt,
-          context: context || undefined,
-          history,
-          message: trimmed,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Chat failed");
-      const reply = data.text as string;
+      let res: Response;
+      try {
+        res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            modelId: model.id,
+            systemPrompt,
+            context: context || undefined,
+            history,
+            message: trimmed,
+          }),
+        });
+      } catch {
+        throw new Error("Could not reach the server. Check your connection.");
+      }
+      let data: { text?: string; error?: string } = {};
+      try {
+        data = await res.json();
+      } catch {
+        // leave empty
+      }
+      if (!res.ok) throw new Error(data.error || `Chat failed (${res.status})`);
+      const reply = (data.text ?? "").trim();
+      if (!reply) throw new Error("The model returned an empty response.");
       pushMessage({ role: "assistant", content: reply });
       await speak(reply);
     } catch (err) {
@@ -62,7 +77,17 @@ export default function ChatPanel({
   }
 
   async function speak(text: string) {
-    if (!audioRef.current) return;
+    // No TTS configured → still animate the sphere with a synthetic envelope
+    // sized to the text length so it feels alive.
+    if (!caps.tts) {
+      const dur = Math.min(8000, Math.max(1200, text.length * 35));
+      setSpeaking(true);
+      reactor.simulate(dur);
+      window.setTimeout(() => setSpeaking(false), dur);
+      return;
+    }
+    const el = audioRef.current;
+    if (!el) return;
     try {
       const res = await fetch("/api/tts", {
         method: "POST",
@@ -71,26 +96,41 @@ export default function ChatPanel({
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        setError(err.error || "TTS failed");
+        // Fallback: still animate the orb so the response feels acknowledged.
+        const dur = Math.min(8000, Math.max(1200, text.length * 35));
+        setSpeaking(true);
+        reactor.simulate(dur);
+        window.setTimeout(() => setSpeaking(false), dur);
+        setError(err.error || `TTS failed (${res.status}) — running in silent mode.`);
         return;
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      const el = audioRef.current;
       if (!attachedRef.current) {
-        reactor.attachElement(el);
-        attachedRef.current = true;
+        attachedRef.current = reactor.attachElement(el);
       }
       el.src = url;
       setSpeaking(true);
-      await el.play();
+      try {
+        await el.play();
+      } catch {
+        // Autoplay blocked or playback failed: fall back to simulated animation.
+        const dur = Math.min(8000, Math.max(1200, text.length * 35));
+        reactor.simulate(dur);
+        window.setTimeout(() => setSpeaking(false), dur);
+        return;
+      }
       el.onended = () => {
         setSpeaking(false);
         URL.revokeObjectURL(url);
       };
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "TTS error");
+      el.onerror = () => {
+        setSpeaking(false);
+        URL.revokeObjectURL(url);
+      };
+    } catch {
       setSpeaking(false);
+      setError("TTS request failed — continuing in silent mode.");
     }
   }
 
@@ -113,7 +153,9 @@ export default function ChatPanel({
       <div className="flex-1 space-y-3 overflow-y-auto rounded-md border border-border bg-panel p-3">
         {history.length === 0 ? (
           <p className="text-sm text-white/40">
-            Type or hold the mic button to start talking with the model.
+            {caps.hasAnyModel
+              ? "Type or hold the mic button to start talking with the model."
+              : "Configure an API key in .env.local to start chatting."}
           </p>
         ) : null}
         {history.map((m, i) => (
@@ -143,7 +185,8 @@ export default function ChatPanel({
 
       <div className="flex items-center gap-2">
         <MicButton
-          disabled={thinking}
+          disabled={thinking || !caps.stt || !caps.hasAnyModel}
+          available={caps.stt}
           onTranscribed={(t) => send(t)}
         />
         <input
@@ -155,12 +198,15 @@ export default function ChatPanel({
               send(input);
             }
           }}
-          placeholder="Type a message..."
-          className="flex-1 rounded-md border border-border bg-panel px-3 py-2 text-sm focus:border-accent focus:outline-none"
+          placeholder={
+            caps.hasAnyModel ? "Type a message..." : "Add an API key to chat"
+          }
+          disabled={!caps.hasAnyModel}
+          className="flex-1 rounded-md border border-border bg-panel px-3 py-2 text-sm focus:border-accent focus:outline-none disabled:opacity-50"
         />
         <button
           onClick={() => send(input)}
-          disabled={thinking || !input.trim()}
+          disabled={thinking || !input.trim() || !caps.hasAnyModel}
           className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent/80 disabled:opacity-40"
         >
           Send

@@ -10,18 +10,27 @@ export default function FileUploader() {
   const clearContext = useApp((s) => s.clearContext);
   const contextLabel = useApp((s) => s.contextLabel);
 
+  const [error, setError] = useState<string | null>(null);
+
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setBusy(true);
+    setError(null);
     try {
       const fd = new FormData();
       Array.from(files).forEach((f) => fd.append("files", f));
       const res = await fetch("/api/extract", { method: "POST", body: fd });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || `Could not read files (${res.status}).`);
+        return;
+      }
       if (data.context) {
         const label = (data.files as string[]).join(", ");
         setContext(data.context, label);
       }
+    } catch {
+      setError("Upload failed — check your connection.");
     } finally {
       setBusy(false);
       if (inputRef.current) inputRef.current.value = "";
@@ -54,6 +63,9 @@ export default function FileUploader() {
         <p className="truncate text-xs text-white/50" title={contextLabel}>
           Loaded: {contextLabel}
         </p>
+      ) : null}
+      {error ? (
+        <p className="text-xs text-amber-300/80">{error}</p>
       ) : null}
       <input
         ref={inputRef}

@@ -9,6 +9,7 @@ export type Prompt = { id: string; title: string; content: string };
 type State = {
   model: ModelOption;
   setModel: (id: string) => void;
+  ensureModel: (allowedIds: string[]) => void;
 
   systemPrompt: string;
   setSystemPrompt: (v: string) => void;
@@ -34,6 +35,14 @@ export const useApp = create<State>((set) => ({
   setModel: (id) => {
     const m = MODELS.find((x) => x.id === id);
     if (m) set({ model: m });
+  },
+  ensureModel: (allowedIds) => {
+    if (allowedIds.length === 0) return;
+    set((s) => {
+      if (allowedIds.includes(s.model.id)) return s;
+      const fallback = MODELS.find((m) => allowedIds.includes(m.id));
+      return fallback ? { ...s, model: fallback } : s;
+    });
   },
   systemPrompt: "You are a helpful, conversational assistant. Keep replies concise and natural to listen to.",
   setSystemPrompt: (v) => set({ systemPrompt: v }),

@@ -28,27 +28,39 @@ export class AudioReactor {
     return this.ctx;
   }
 
-  attachElement(el: HTMLAudioElement) {
-    const ctx = this.ensureCtx();
-    this.disconnect();
-    this.source = ctx.createMediaElementSource(el);
-    this.analyser = ctx.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.source.connect(this.analyser);
-    this.analyser.connect(ctx.destination);
-    this.data = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
-    this.loop();
+  attachElement(el: HTMLAudioElement): boolean {
+    try {
+      const ctx = this.ensureCtx();
+      this.disconnect();
+      this.source = ctx.createMediaElementSource(el);
+      this.analyser = ctx.createAnalyser();
+      this.analyser.fftSize = 256;
+      this.source.connect(this.analyser);
+      this.analyser.connect(ctx.destination);
+      this.data = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
+      this.loop();
+      return true;
+    } catch (err) {
+      console.warn("AudioReactor.attachElement failed", err);
+      return false;
+    }
   }
 
-  attachStream(stream: MediaStream) {
-    const ctx = this.ensureCtx();
-    this.disconnect();
-    this.source = ctx.createMediaStreamSource(stream);
-    this.analyser = ctx.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.source.connect(this.analyser);
-    this.data = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
-    this.loop();
+  attachStream(stream: MediaStream): boolean {
+    try {
+      const ctx = this.ensureCtx();
+      this.disconnect();
+      this.source = ctx.createMediaStreamSource(stream);
+      this.analyser = ctx.createAnalyser();
+      this.analyser.fftSize = 256;
+      this.source.connect(this.analyser);
+      this.data = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
+      this.loop();
+      return true;
+    } catch (err) {
+      console.warn("AudioReactor.attachStream failed", err);
+      return false;
+    }
   }
 
   private loop = () => {
@@ -65,6 +77,34 @@ export class AudioReactor {
   subscribe(fn: (level: number) => void) {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /**
+   * Drive the level with a synthetic waveform — used when TTS isn't available
+   * but we still want the orb to feel alive while the assistant "speaks".
+   */
+  simulate(durationMs: number) {
+    this.disconnect();
+    const start = performance.now();
+    const tick = () => {
+      const elapsed = performance.now() - start;
+      if (elapsed >= durationMs) {
+        this.level = 0;
+        this.listeners.forEach((fn) => fn(0));
+        this.raf = 0;
+        return;
+      }
+      const t = elapsed / 1000;
+      const base =
+        0.45 +
+        0.25 * Math.sin(t * 5.3) +
+        0.15 * Math.sin(t * 11.1 + 0.7) +
+        0.1 * Math.sin(t * 2.1 + 1.3);
+      this.level = Math.max(0, Math.min(1, base * 0.8));
+      this.listeners.forEach((fn) => fn(this.level));
+      this.raf = requestAnimationFrame(tick);
+    };
+    this.raf = requestAnimationFrame(tick);
   }
 
   disconnect() {

@@ -14,11 +14,20 @@ export default function PromptPicker() {
   const setSystemPrompt = useApp((s) => s.setSystemPrompt);
   const systemPrompt = useApp((s) => s.systemPrompt);
 
+  const [error, setError] = useState<string | null>(null);
+
   async function load() {
-    const res = await fetch("/api/prompts");
-    const data = await res.json();
-    setConfigured(Boolean(data.configured));
-    setPrompts(data.prompts || []);
+    try {
+      const res = await fetch("/api/prompts");
+      const data = await res.json().catch(() => ({}));
+      setConfigured(Boolean(data.configured));
+      setPrompts(data.prompts || []);
+      if (data.error) setError(data.error);
+    } catch {
+      setConfigured(false);
+      setPrompts([]);
+      setError("Could not load prompts — running in file-upload mode.");
+    }
   }
 
   useEffect(() => {
@@ -27,22 +36,34 @@ export default function PromptPicker() {
 
   async function savePrompt() {
     if (!title.trim() || !content.trim()) return;
-    const res = await fetch("/api/prompts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, content }),
-    });
-    if (res.ok) {
-      setTitle("");
-      setContent("");
-      setCreating(false);
-      load();
+    setError(null);
+    try {
+      const res = await fetch("/api/prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, content }),
+      });
+      if (res.ok) {
+        setTitle("");
+        setContent("");
+        setCreating(false);
+        load();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Could not save prompt.");
+      }
+    } catch {
+      setError("Could not save prompt.");
     }
   }
 
   async function deletePrompt(id: string) {
-    await fetch(`/api/prompts?id=${id}`, { method: "DELETE" });
-    load();
+    try {
+      await fetch(`/api/prompts?id=${id}`, { method: "DELETE" });
+      load();
+    } catch {
+      setError("Could not delete prompt.");
+    }
   }
 
   return (
@@ -65,6 +86,12 @@ export default function PromptPicker() {
         <p className="rounded-md border border-border bg-panel px-3 py-2 text-xs text-white/60">
           No database connected. The system prompt below is editable manually,
           and you can attach files for the assistant to read.
+        </p>
+      ) : null}
+
+      {error ? (
+        <p className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-xs text-amber-200">
+          {error}
         </p>
       ) : null}
 
